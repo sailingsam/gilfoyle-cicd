@@ -1,0 +1,78 @@
+# =============================================================================
+# Backend Deployment
+# =============================================================================
+# Purpose: Deploy the Node.js/Express API server
+# Why: Manages pod replicas, updates, and self-healing capabilities
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: house-arena-backend
+  namespace: house-arena
+  labels:
+    app: house-arena
+    component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: house-arena
+      component: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: house-arena
+        component: backend
+    spec:
+      containers:
+        - name: backend
+          image: DOCKERHUB_USERNAME/house-arena-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+              protocol: TCP
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: house-arena-config
+                  key: PORT
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: house-arena-config
+                  key: NODE_ENV
+          # Resource limits ensure fair resource allocation
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          # Liveness probe detects if container is stuck
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe determines if pod can receive traffic
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      # Graceful shutdown handling
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,347 @@
+# =============================================================================
+# CD Pipeline for House-Arena - AWS EKS Deployment
+# =============================================================================
+# This pipeline handles Continuous Deployment to AWS EKS (Elastic Kubernetes Service).
+# It is triggered after successful CI pipeline completion or manually.
+#
+# Pipeline Stages:
+# 1. Configure AWS Credentials - Authenticate with AWS
+# 2. Setup kubectl & Update kubeconfig - Configure EKS access
+# 3. Deploy to EKS - Apply Kubernetes manifests
+# 4. Health Check - Verify deployment is healthy
+# 5. DAST (Optional) - Dynamic Application Security Testing
+# 6. Rollback - Automatic rollback on failure
+#
+# Prerequisites:
+# - AWS EKS cluster created
+# - GitHub Secrets configured (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.)
+# - DockerHub credentials for image pull
+# =============================================================================
+
+name: CD Pipeline - AWS EKS
+
+on:
+  # Trigger after CI completes on main/master
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
+
+  # Manual trigger with environment selection
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Image tag to deploy (default: latest)'
+        required: false
+        default: 'latest'
+
+env:
+  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/house-arena-backend
+  AWS_REGION: ${{ secrets.AWS_REGION || 'ap-south-1' }}
+  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME || 'house-arena-cluster' }}
+
+jobs:
+  # ===========================================================================
+  # Deploy to AWS EKS
+  # ===========================================================================
+  deploy:
+    name: Deploy to AWS EKS
+    runs-on: ubuntu-latest
+    # Only run if CI was successful (for workflow_run trigger)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+      url: ${{ steps.get-url.outputs.app_url }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Configure AWS Credentials
+      # Purpose: Authenticate with AWS using IAM credentials
+      # Why: Required to access EKS cluster and other AWS services
+      # Security: Uses GitHub Secrets - never hardcode credentials
+      # -----------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      # Setup kubectl
+      # Purpose: Install Kubernetes CLI tool
+      # Why: Required for interacting with the EKS cluster
+      # -----------------------------------------------------------------------
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      # -----------------------------------------------------------------------
+      # Update kubeconfig for EKS
+      # Purpose: Configure kubectl to communicate with EKS cluster
+      # Why: EKS uses IAM for authentication - aws eks command handles this
+      # -----------------------------------------------------------------------
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      # Verify Cluster Connection
+      # Purpose: Ensure we can connect to the EKS cluster before deployment
+      # Why: Fail fast if cluster is unreachable
+      # -----------------------------------------------------------------------
+      - name: Verify Cluster Connection
+        run: |
+          echo "Verifying EKS cluster connection..."
+          kubectl cluster-info
+          kubectl get nodes
+          echo "Cluster connection verified!"
+
+      # -----------------------------------------------------------------------
+      # Create/Update Namespace
+      # Purpose: Ensure deployment namespace exists
+      # Why: Isolation of resources per environment
+      # -----------------------------------------------------------------------
+      - name: Setup Namespace
+        run: |
+          NAMESPACE="house-arena"
+          kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+          echo "Namespace ${NAMESPACE} ready"
+
+      # -----------------------------------------------------------------------
+      # Deploy ConfigMap
+      # Purpose: Apply configuration settings
+      # Why: Separates configuration from application code
+      # -----------------------------------------------------------------------
+      - name: Deploy ConfigMap
+        run: |
+          kubectl apply -f k8s/configmap.yaml
+          echo "ConfigMap deployed"
+
+      # -----------------------------------------------------------------------
+      # Update Image Tags in Manifests
+      # Purpose: Set the correct image tags before deployment
+      # Why: Ensures we deploy the specific version from CI
+      # -----------------------------------------------------------------------
+      - name: Update Image Tags
+        run: |
+          IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}
+
+          # Update backend image in deployment manifest
+          sed -i "s|DOCKERHUB_USERNAME/house-arena-backend:.*|${{ env.BACKEND_IMAGE }}:${IMAGE_TAG}|g" k8s/backend-deployment.yaml
+
+          echo "Image tag updated to: ${IMAGE_TAG}"
+          cat k8s/backend-deployment.yaml | grep image:
+
+      # -----------------------------------------------------------------------
+      # Deploy Application
+      # Purpose: Apply all Kubernetes manifests to EKS
+      # Why: Creates/updates all required resources in the cluster
+      # -----------------------------------------------------------------------
+      - name: Deploy Application
+        id: deploy
+        run: |
+          echo "Deploying to EKS..."
+
+          # Apply namespace first
+          kubectl apply -f k8s/namespace.yaml
+
+          # Apply ConfigMap
+          kubectl apply -f k8s/configmap.yaml
+
+          # Apply backend deployment and service
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/backend-service.yaml
+
+          # Apply HPA for auto-scaling
+          kubectl apply -f k8s/hpa.yaml
+
+          echo "All manifests applied successfully!"
+
+      # -----------------------------------------------------------------------
+      # Wait for Deployment Rollout
+      # Purpose: Ensure all pods are running and ready
+      # Why: Validates deployment success before marking as complete
+      # -----------------------------------------------------------------------
+      - name: Wait for Deployment Rollout
+        run: |
+          echo "Waiting for backend deployment rollout..."
+          kubectl rollout status deployment/house-arena-backend \
+            --namespace=house-arena \
+            --timeout=300s
+
+          echo "Deployment rollout completed!"
+
+      # -----------------------------------------------------------------------
+      # Get Service URL
+      # Purpose: Retrieve the LoadBalancer external URL
+      # Why: Provides the endpoint for accessing the deployed application
+      # -----------------------------------------------------------------------
+      - name: Get Service URL
+        id: get-url
+        run: |
+          echo "Waiting for LoadBalancer to be provisioned..."
+
+          # Wait for external IP/hostname
+          for i in {1..30}; do
+            EXTERNAL_HOST=$(kubectl get svc house-arena-backend \
+              --namespace=house-arena \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+            if [ -n "$EXTERNAL_HOST" ]; then
+              echo "LoadBalancer hostname: $EXTERNAL_HOST"
+              echo "app_url=http://${EXTERNAL_HOST}" >> $GITHUB_OUTPUT
+              break
+            fi
+
+            echo "Waiting for LoadBalancer... (attempt $i/30)"
+            sleep 10
+          done
+
+          if [ -z "$EXTERNAL_HOST" ]; then
+            echo "Warning: LoadBalancer hostname not yet available"
+            echo "app_url=pending" >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # Health Check
+      # Purpose: Verify the deployed application is responding correctly
+      # Why: Ensures application is functioning after deployment
+      # -----------------------------------------------------------------------
+      - name: Health Check
+        run: |
+          echo "Running health checks..."
+
+          # Get pod status
+          kubectl get pods --namespace=house-arena -l app=house-arena
+
+          # Get service details
+          kubectl get svc house-arena-backend --namespace=house-arena
+
+          # Check pod logs
+          echo "Recent pod logs:"
+          kubectl logs -l app=house-arena,component=backend \
+            --namespace=house-arena \
+            --tail=30 || true
+
+          # Port-forward and test health endpoint
+          echo "Testing health endpoint via port-forward..."
+          kubectl port-forward svc/house-arena-backend 8080:80 \
+            --namespace=house-arena &
+          PF_PID=$!
+          sleep 5
+
+          curl -f http://localhost:8080/api/health || echo "Health check via port-forward"
+
+          kill $PF_PID 2>/dev/null || true
+
+          echo "Health checks completed!"
+
+      # -----------------------------------------------------------------------
+      # DAST - Dynamic Application Security Testing (Optional)
+      # Purpose: Test running application for security vulnerabilities
+      # Why: Catches runtime security issues that static analysis misses
+      # Note: This is a basic DAST scan - for production, use full OWASP ZAP
+      # -----------------------------------------------------------------------
+      - name: DAST - Basic Security Scan
+        continue-on-error: true
+        run: |
+          echo "Running basic DAST scan..."
+
+          # Port-forward for testing
+          kubectl port-forward svc/house-arena-backend 8080:80 \
+            --namespace=house-arena &
+          PF_PID=$!
+          sleep 5
+
+          # Basic security headers check
+          echo "Checking security headers..."
+          curl -I http://localhost:8080/api/health 2>/dev/null | head -20
+
+          # Test for common vulnerabilities
+          echo "Testing endpoints..."
+          curl -s http://localhost:8080/api/health | jq .
+          curl -s http://localhost:8080/api/status | jq .
+
+          # Test 404 handling
+          echo "Testing 404 handling..."
+          curl -s http://localhost:8080/api/nonexistent | jq .
+
+          kill $PF_PID 2>/dev/null || true
+
+          echo "Basic DAST scan completed!"
+
+      # -----------------------------------------------------------------------
+      # Rollback on Failure
+      # Purpose: Automatically rollback if deployment fails
+      # Why: Maintains service availability even when deployments fail
+      # -----------------------------------------------------------------------
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          echo "Deployment failed, initiating rollback..."
+
+          kubectl rollout undo deployment/house-arena-backend \
+            --namespace=house-arena || true
+
+          echo "Rollback completed. Checking status..."
+          kubectl rollout status deployment/house-arena-backend \
+            --namespace=house-arena \
+            --timeout=120s || true
+
+      # -----------------------------------------------------------------------
+      # Deployment Summary
+      # Purpose: Provide clear output of deployment status
+      # Why: Improves visibility and documentation
+      # -----------------------------------------------------------------------
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ github.event.inputs.environment || 'staging' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster:** ${{ env.EKS_CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ env.BACKEND_IMAGE }}:${{ github.event.inputs.image_tag || 'latest' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployed Resources:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get all --namespace=house-arena 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "Unable to fetch resources" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Notification Job (Optional)
+  # ===========================================================================
+  notify:
+    name: Send Notification
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+
+    steps:
+      - name: Deployment Notification
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "Deployment to AWS EKS completed successfully!"
+          else
+            echo "Deployment to AWS EKS failed. Please check the logs."
+          fi

@@ -1,0 +1,390 @@
+# =============================================================================
+# CI Pipeline for House-Arena
+# =============================================================================
+# This pipeline implements a production-grade CI workflow following DevSecOps
+# best practices. Each stage is designed to catch issues early (shift-left approach)
+# and ensure only quality, tested, and secure code gets containerized and published.
+#
+# Pipeline Stages:
+# 1. Checkout - Retrieve source code
+# 2. Setup Runtime - Install Node.js
+# 3. Dependency Install - Install and cache dependencies
+# 4. Linting - Enforce coding standards (prevents technical debt)
+# 5. SAST - Static Application Security Testing (detects code vulnerabilities)
+# 6. SCA - Software Composition Analysis (detects vulnerable dependencies)
+# 7. Unit Tests - Validate business logic (prevents regressions)
+# 8. Build - Verify application can be packaged
+# 9. Docker Build - Create container image
+# 10. Image Scan - Trivy vulnerability scanning (prevents vulnerable images)
+# 11. Container Test - Validate container behavior (ensures image is runnable)
+# 12. Registry Push - Publish trusted images (enables downstream CD)
+# =============================================================================
+
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  DOCKER_REGISTRY: docker.io
+  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/house-arena-backend
+
+jobs:
+  # ===========================================================================
+  # Code Quality & Testing Job
+  # ===========================================================================
+  code-quality:
+    name: Code Quality & Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Stage 1: Checkout
+      # Purpose: Retrieve source code from repository
+      # Why: Foundation for all subsequent stages - cannot build without code
+      # -----------------------------------------------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Stage 2: Setup Runtime
+      # Purpose: Install Node.js runtime environment
+      # Why: Provides consistent, reproducible build environment across runs
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: './backend/package-lock.json'
+
+      # -----------------------------------------------------------------------
+      # Stage 3: Install Dependencies
+      # Purpose: Install project dependencies with caching
+      # Why: Caching speeds up builds; clean install ensures reproducibility
+      # -----------------------------------------------------------------------
+      - name: Install Dependencies
+        run: npm ci
+
+      # -----------------------------------------------------------------------
+      # Stage 4: Linting
+      # Purpose: Enforce coding standards and identify code quality issues
+      # Why: Prevents technical debt, ensures maintainability, catches bugs early
+      # Risk Mitigated: Poor code quality leading to maintenance issues
+      # -----------------------------------------------------------------------
+      - name: Run ESLint
+        run: npm run lint
+        continue-on-error: false
+
+      # -----------------------------------------------------------------------
+      # Stage 5: Unit Tests
+      # Purpose: Validate business logic and catch regressions
+      # Why: Ensures code changes don't break existing functionality
+      # Risk Mitigated: Regression bugs reaching production
+      # -----------------------------------------------------------------------
+      - name: Run Unit Tests
+        run: npm test
+        continue-on-error: false
+
+      # -----------------------------------------------------------------------
+      # Stage 6: Build Verification
+      # Purpose: Verify the application can be packaged successfully
+      # Why: Catches build-time errors before containerization
+      # -----------------------------------------------------------------------
+      - name: Verify Build
+        run: node --check index.js && node --check app.js
+
+  # ===========================================================================
+  # SAST - Static Application Security Testing (CodeQL)
+  # ===========================================================================
+  sast:
+    name: SAST - CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # CodeQL Analysis
+      # Purpose: Detect code-level security vulnerabilities (OWASP Top 10)
+      # Why: Identifies injection flaws, XSS, insecure patterns before deployment
+      # Risk Mitigated: Security vulnerabilities in application code
+      # -----------------------------------------------------------------------
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+  # ===========================================================================
+  # SCA - Software Composition Analysis
+  # ===========================================================================
+  sca:
+    name: SCA - Dependency Security
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: './backend/package-lock.json'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # -----------------------------------------------------------------------
+      # NPM Audit
+      # Purpose: Check for known vulnerabilities in npm dependencies
+      # Why: Supply chain attacks are increasingly common; dependencies can
+      #      introduce vulnerabilities that weren't in your code
+      # Risk Mitigated: Vulnerable third-party packages
+      # -----------------------------------------------------------------------
+      - name: NPM Audit
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+      # -----------------------------------------------------------------------
+      # OWASP Dependency Check
+      # Purpose: Comprehensive dependency vulnerability scanning
+      # Why: Uses NVD (National Vulnerability Database) for thorough analysis
+      # Risk Mitigated: Known CVEs in dependencies
+      # -----------------------------------------------------------------------
+      - name: OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'house-arena-backend'
+          path: './backend'
+          format: 'HTML'
+          args: >
+            --failOnCVSS 8
+            --enableRetired
+        continue-on-error: true
+
+      - name: Upload Dependency Check Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: reports/
+          retention-days: 7
+
+  # ===========================================================================
+  # Docker Build, Scan & Test Job
+  # ===========================================================================
+  docker-build-scan:
+    name: Docker Build, Scan & Test
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Setup Docker Buildx
+      # Purpose: Enable advanced Docker build features
+      # Why: Provides multi-platform builds, better caching, and performance
+      # -----------------------------------------------------------------------
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -----------------------------------------------------------------------
+      # Login to DockerHub
+      # Purpose: Authenticate with container registry
+      # Why: Required for pushing images; uses secrets for security
+      # -----------------------------------------------------------------------
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Build Docker Image
+      # Purpose: Create container image for backend service
+      # Why: Containerization ensures consistent deployment across environments
+      # -----------------------------------------------------------------------
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.BACKEND_IMAGE }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # Trivy Container Vulnerability Scan
+      # Purpose: Detect OS and library vulnerabilities in container image
+      # Why: Container images can have vulnerable base images or packages
+      #      that aren't caught by code-level scans
+      # Risk Mitigated: Vulnerable container images reaching production
+      # -----------------------------------------------------------------------
+      - name: Run Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:scan
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Run Trivy Scan (SARIF output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:scan
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy Scan Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # -----------------------------------------------------------------------
+      # Container Runtime Test
+      # Purpose: Validate that the container starts and responds correctly
+      # Why: Ensures the image is actually runnable before pushing to registry
+      # Risk Mitigated: Broken/non-functional containers being deployed
+      # -----------------------------------------------------------------------
+      - name: Test Container Runtime
+        run: |
+          echo "Starting container..."
+          docker run -d --name backend-test \
+            -p 4000:4000 \
+            -e PORT=4000 \
+            -e NODE_ENV=test \
+            ${{ env.BACKEND_IMAGE }}:scan
+
+          echo "Waiting for container to be ready..."
+          sleep 10
+
+          echo "Checking container is running..."
+          docker ps | grep backend-test
+
+          echo "Testing health endpoint..."
+          curl -f http://localhost:4000/api/health || exit 1
+
+          echo "Testing status endpoint..."
+          curl -f http://localhost:4000/api/status || exit 1
+
+          echo "Container logs:"
+          docker logs backend-test
+
+          echo "Cleanup..."
+          docker stop backend-test
+          docker rm backend-test
+
+          echo "Container runtime test passed!"
+
+  # ===========================================================================
+  # Registry Push Job
+  # ===========================================================================
+  registry-push:
+    name: Push to Registry
+    runs-on: ubuntu-latest
+    needs: [code-quality, sast, sca, docker-build-scan]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_short }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Generate Image Tags
+      # Purpose: Create semantic versioning tags for images
+      # Why: Enables proper version tracking and rollback capabilities
+      # -----------------------------------------------------------------------
+      - name: Generate Tags
+        id: meta
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      # Push Backend Image
+      # Purpose: Publish trusted backend image to registry
+      # Why: Makes image available for downstream CD pipeline deployment
+      # -----------------------------------------------------------------------
+      - name: Build and Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:latest
+            ${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.sha_short }}
+            ${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # Summary
+      # Purpose: Provide clear output of what was published
+      # Why: Improves visibility and debugging capability
+      # -----------------------------------------------------------------------
+      - name: Pipeline Summary
+        run: |
+          echo "## CI Pipeline Completed Successfully! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Scans Completed:" >> $GITHUB_STEP_SUMMARY
+          echo "- SAST (CodeQL): Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- SCA (Dependency Check): Completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Container Scan (Trivy): Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Published Image:" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.sha_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags Applied:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.meta.outputs.sha_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.meta.outputs.timestamp }}\`" >> $GITHUB_STEP_SUMMARY

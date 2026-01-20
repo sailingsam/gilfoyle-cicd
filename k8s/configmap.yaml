@@ -1,0 +1,17 @@
+# =============================================================================
+# ConfigMap for House-Arena
+# =============================================================================
+# Purpose: Store non-sensitive configuration data
+# Why: Separates configuration from code, enables environment-specific settings
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: house-arena-config
+  namespace: house-arena
+  labels:
+    app: house-arena
+data:
+  NODE_ENV: "production"
+  PORT: "4000"

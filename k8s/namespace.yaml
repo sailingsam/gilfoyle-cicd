@@ -1,0 +1,14 @@
+# =============================================================================
+# Namespace Configuration
+# =============================================================================
+# Purpose: Isolate House-Arena resources from other applications
+# Why: Provides logical separation, easier RBAC management, and resource quotas
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: house-arena
+  labels:
+    app: house-arena
+    environment: production
