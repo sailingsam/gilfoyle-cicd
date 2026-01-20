@@ -25,8 +25,13 @@ describe('Module Loading', () => {
     assert.ok(express.default, 'Express should be importable');
   });
 
-  it('should be able to import mongoose', async () => {
-    const mongoose = await import('mongoose');
-    assert.ok(mongoose.default, 'Mongoose should be importable');
+  it('should be able to import cors', async () => {
+    const cors = await import('cors');
+    assert.ok(cors.default, 'CORS should be importable');
+  });
+
+  it('should be able to import morgan', async () => {
+    const morgan = await import('morgan');
+    assert.ok(morgan.default, 'Morgan should be importable');
   });
 });
