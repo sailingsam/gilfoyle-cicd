@@ -1,0 +1,74 @@
+================================================================================
+                    DEVOPS CI/CD PROJECT PROPOSAL
+================================================================================
+
+PROJECT TITLE
+-------------
+Production-Grade CI/CD Pipeline with DevSecOps for House Arena Backend API
+
+GITHUB REPOSITORY URL
+---------------------
+https://github.com/sailingsam/gilfoyle-cicd
+
+APPLICATION DESCRIPTION
+-----------------------
+House Arena Backend is a lightweight Node.js/Express REST API that provides:
+- Health check endpoints for Kubernetes probes
+- System status and metrics endpoints
+- Stateless architecture ideal for containerization and scaling
+
+Tech Stack: Node.js 20, Express.js, Docker, Kubernetes (AWS EKS)
+
+CI/CD PROBLEM STATEMENT
+-----------------------
+Manual software deployment processes face critical challenges:
+
+1. Human Error: Manual deployments are error-prone and inconsistent
+2. Security Gaps: Vulnerabilities often reach production undetected
+3. Slow Releases: Manual testing and deployment slow down delivery
+4. No Quality Gates: Code quality issues slip through without automation
+5. Environment Drift: Inconsistencies between dev and production environments
+
+This project solves these by implementing automated CI/CD with integrated
+security scanning (DevSecOps) to ensure only tested, secure code reaches
+production.
+
+CHOSEN CI/CD STAGES AND JUSTIFICATION
+-------------------------------------
+CI PIPELINE:
+
+| Stage              | Tool           | Justification                          |
+|--------------------|----------------|----------------------------------------|
+| Checkout           | actions/checkout| Retrieve source code for pipeline     |
+| Linting            | ESLint         | Enforce code standards, prevent debt   |
+| SAST               | CodeQL         | Detect code vulnerabilities (OWASP)    |
+| SCA                | npm audit      | Find vulnerable dependencies           |
+| Unit Tests         | Node test      | Validate logic, prevent regressions    |
+| Docker Build       | Buildx         | Containerize for consistency           |
+| Container Scan     | Trivy          | Find OS/library CVEs in image          |
+| Container Test     | curl/docker    | Verify image runs correctly            |
+| Registry Push      | DockerHub      | Publish trusted image for deployment   |
+
+CD PIPELINE:
+
+| Stage              | Tool           | Justification                          |
+|--------------------|----------------|----------------------------------------|
+| AWS Configure      | aws-actions    | Authenticate with cloud provider       |
+| Update kubeconfig  | aws eks        | Connect to Kubernetes cluster          |
+| Deploy to EKS      | kubectl        | Apply K8s manifests                    |
+| Health Check       | kubectl/curl   | Verify deployment success              |
+| DAST               | curl           | Basic runtime security testing         |
+| Rollback           | kubectl        | Auto-recover on failure                |
+
+EXPECTED OUTCOMES
+-----------------
+1. Fully automated build, test, and deployment pipeline
+2. Security vulnerabilities detected before reaching production
+3. Consistent deployments via containerization
+4. Zero-downtime deployments with rolling updates
+5. Auto-scaling based on CPU/memory utilization
+6. Automatic rollback on deployment failures
+7. Complete audit trail via GitHub Actions logs
+8. Reduced deployment time from hours to minutes
+
+================================================================================

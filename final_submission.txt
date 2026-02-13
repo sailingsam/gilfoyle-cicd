@@ -1,0 +1,115 @@
+================================================================================
+         ADVANCED DEVOPS CI/CD PROJECT - HOUSE ARENA BACKEND
+================================================================================
+
+1. PROBLEM BACKGROUND & MOTIVATION
+-----------------------------------
+Manual deployments cause human errors, security gaps, and slow releases.
+This project implements automated CI/CD with DevSecOps to:
+- Catch bugs and vulnerabilities early (shift-left)
+- Ensure consistent, repeatable deployments
+- Automate quality gates before production
+
+2. APPLICATION OVERVIEW
+-----------------------
+- Stack: Node.js 20 + Express.js
+- Endpoints:
+  GET /api        → API info
+  GET /api/health → Health check (K8s probes)
+  GET /api/status → System metrics
+
+3. CI/CD WORKFLOW DIAGRAM
+-------------------------
+CI PIPELINE (on push to main):
+
+Checkout -> Lint (ESLint) -> SAST (CodeQL) -> SCA (npm audit) -> Unit Tests -> Docker Build -> Trivy Scan -> Container Test -> Push to DockerHub
+
+CD PIPELINE (after CI success):
+
+AWS Configure -> Update kubeconfig -> Deploy to EKS -> Health Check -> DAST -> Rollback (if failed)
+
+4. SECURITY & QUALITY CONTROLS
+------------------------------
+| Control      | Why It Matters                              |
+|--------------|---------------------------------------------|
+| ESLint       | Prevents technical debt                     |
+| Unit Tests   | Prevents regressions                        |
+| CodeQL(SAST) | Detects code vulnerabilities (OWASP Top 10) |
+| npm audit    | Finds vulnerable dependencies               |
+| Trivy Scan   | Finds container/OS vulnerabilities          |
+| Non-root     | Prevents container escape attacks           |
+| Auto Rollback| Maintains availability on failures          |
+
+5. RESULTS & OBSERVATIONS
+-------------------------
+✅ Code Quality & Tests   - 11/11 tests passing
+✅ SAST (CodeQL)          - No critical vulnerabilities
+✅ SCA (Dependency Check) - Completed
+✅ Docker Build & Scan    - Image built, scanned, tested
+✅ Push to Registry       - Image on DockerHub
+
+Pipeline time: ~3-5 minutes | Caching improves subsequent runs
+
+6. LIMITATIONS & IMPROVEMENTS
+-----------------------------
+Limitations:
+- Basic DAST (no full OWASP ZAP)
+- Single environment (no staging/prod separation)
+- No blue/green deployments
+
+Future Improvements:
+- Add OWASP ZAP for comprehensive DAST
+- Implement blue/green deployments
+- Add Prometheus/Grafana monitoring
+- Slack notifications on failures
+
+7. CONCLUSION
+-------------
+Implemented production-grade CI/CD with:
+✅ Automated builds, tests, and deployments
+✅ Multi-layered security (SAST, SCA, Container Scan)
+✅ Kubernetes deployment with auto-scaling
+✅ Shift-left security approach
+
+================================================================================
+                               README
+================================================================================
+
+## Quick Start
+
+```bash
+# Local
+cd backend && npm install && npm run dev
+
+# Docker
+docker-compose up --build
+
+# Kubernetes
+kubectl apply -f k8s/
+```
+
+## Secrets Configuration (GitHub → Settings → Secrets → Actions)
+
+| Secret               | Value                    |
+|----------------------|--------------------------|
+| DOCKERHUB_USERNAME   | Your DockerHub username  |
+| DOCKERHUB_TOKEN      | DockerHub access token   |
+| AWS_ACCESS_KEY_ID    | AWS IAM access key       |
+| AWS_SECRET_ACCESS_KEY| AWS IAM secret key       |
+| AWS_REGION           | ap-south-1               |
+| EKS_CLUSTER_NAME     | house-arena-cluster      |
+
+## CI Stage Explanation
+
+| Stage         | Purpose                          | Risk Mitigated              |
+|---------------|----------------------------------|-----------------------------|
+| Linting       | Enforce coding standards         | Technical debt              |
+| SAST(CodeQL)  | Find code vulnerabilities        | Security bugs in code       |
+| SCA(npm audit)| Find dependency vulnerabilities  | Supply chain attacks        |
+| Unit Tests    | Validate business logic          | Regressions                 |
+| Docker Build  | Create container image           | Environment inconsistency   |
+| Trivy Scan    | Scan container for CVEs          | Vulnerable images           |
+| Container Test| Verify image runs correctly      | Broken deployments          |
+| Push Registry | Publish trusted image            | Enables CD pipeline         |
+
+================================================================================
