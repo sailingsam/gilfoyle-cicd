@@ -143,7 +143,10 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Update Image Tags
         run: |
-          IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}
+          IMAGE_TAG=${{ github.event.inputs.image_tag || '' }}
+          if [ -z "$IMAGE_TAG" ]; then
+            IMAGE_TAG=$(git rev-parse --short HEAD)
+          fi
 
           # Update backend image in deployment manifest
           sed -i "s|DOCKERHUB_USERNAME/house-arena-backend:.*|${{ env.BACKEND_IMAGE }}:${IMAGE_TAG}|g" k8s/backend-deployment.yaml
