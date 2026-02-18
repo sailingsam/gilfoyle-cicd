@@ -22,7 +22,7 @@ app.get("/api/health", (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     service: "house-arena-backend",
-    version: "1.1.1"
+    version: "1.1.3"
   });
 });
 
@@ -51,8 +51,8 @@ app.get("/api/status", (req, res) => {
 // Welcome endpoint
 app.get("/api", (req, res) => {
   res.status(200).json({
-    message: "Welcome to House Arena API - Live Demo, from scaler DevOps course",
-    version: "1.1.1",
+    message: "Welcome to House Arena API - Live Demo, from scaler",
+    version: "1.1.3",
     endpoints: [
       { method: "GET", path: "/api/health", description: "Health check endpoint" },
       { method: "GET", path: "/api/status", description: "System status and metrics" }
