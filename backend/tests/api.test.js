@@ -11,12 +11,12 @@ describe("API Health Check", () => {
       status: "healthy",
       timestamp: new Date().toISOString(),
       service: "house-arena-backend",
-      version: "1.1.0"
+      version: "1.1.1"
     };
 
     assert.strictEqual(healthResponse.status, "healthy");
     assert.strictEqual(healthResponse.service, "house-arena-backend");
-    assert.strictEqual(healthResponse.version, "1.1.0");
+    assert.strictEqual(healthResponse.version, "1.1.1");
     assert.ok(healthResponse.timestamp);
   });
 });

@@ -1,3 +1,28 @@
+# 1. Cluster Role
+aws iam create-role --role-name eksClusterRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam attach-role-policy --role-name eksClusterRole --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+# 2. Node Role
+aws iam create-role --role-name eksNodeRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam attach-role-policy --role-name eksNodeRole --policy-arn arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+aws iam attach-role-policy --role-name eksNodeRole --policy-arn arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+aws iam attach-role-policy --role-name eksNodeRole --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+# 3. Cluster (~15 min)
+aws eks create-cluster --name house-arena-cluster --region ap-south-1 --role-arn arn:aws:iam::825158027556:role/eksClusterRole --resources-vpc-config subnetIds=subnet-0f8e1f37f826318c7,subnet-0086d5ab946385b8c,subnet-0287c426f8f4d78a6
+# 3.5 for checking status
+aws eks describe-cluster --name house-arena-cluster --region ap-south-1 --query "cluster.status" --output text
+
+
+# 4. Node Group (~5 min) — cluster ACTIVE hone ke baad
+aws eks create-nodegroup --cluster-name house-arena-cluster --nodegroup-name house-arena-nodes --node-role arn:aws:iam::825158027556:role/eksNodeRole --subnets subnet-0f8e1f37f826318c7 subnet-0086d5ab946385b8c subnet-0287c426f8f4d78a6 --instance-types t3.small --scaling-config minSize=1,maxSize=2,desiredSize=1 --region ap-south-1
+# 4.5 verify 
+aws eks describe-nodegroup --cluster-name house-arena-cluster --nodegroup-name house-arena-nodes --region ap-south-1 --query "nodegroup.status" --output text
+
+# 5. Kubeconfig
+aws eks update-kubeconfig --name house-arena-cluster --region ap-south-1
+
+
 ================================================================================
          ADVANCED DEVOPS CI/CD PROJECT - HOUSE ARENA BACKEND
 ================================================================================
