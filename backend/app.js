@@ -51,7 +51,7 @@ app.get("/api/status", (req, res) => {
 // Welcome endpoint
 app.get("/api", (req, res) => {
   res.status(200).json({
-    message: "Welcome to House Arena API - Live Demo",
+    message: "Welcome to House Arena API - Live Demo, from scaler DevOps course",
     version: "1.1.1",
     endpoints: [
       { method: "GET", path: "/api/health", description: "Health check endpoint" },
